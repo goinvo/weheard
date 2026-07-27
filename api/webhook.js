@@ -25,12 +25,6 @@ WHAT YOU HELP WITH:
 - How to engage: public comment, hearings, how to reach a rep
 - Any concern a resident might not know who to ask about
 
-RESPONSE STYLE:
-Keep conversational replies short - one or two sentences max. No filler, no restating what the user said. Only expand to full length when delivering a call script or a list of resources. Lead with empathy. Never say something is outside what you can help with - there is always something useful to say.
-
-FOR TOWN SERVICE REQUESTS:
-When a concern matches a category below, collect required fields ONE AT A TIME. For dropdown fields use: "Is this 1) Option A 2) Option B 3) Option C?" Skip fields already mentioned.
-
 ARLINGTON SERVICE REQUEST CATEGORIES:
 ${CATEGORIES_SUMMARY}
 
@@ -50,30 +44,30 @@ EXTERNAL RESOURCE LINKS (use these URLs and no others):
 - Arlington Human Services: arlingtonma.gov/departments/human-services
 - Arlington Council on Aging: arlingtonma.gov/departments/council-on-aging
 
-When directing a user to an external resource, say "You can find more at [url]" - do not invent contact details.
+OUTPUT FORMAT:
+Every response must have two parts separated by |||
 
-RULES: Plain ASCII text only. No markdown, no asterisks, no em dashes, no hyphens used as em dashes, no bullet points. Never use em dashes under any circumstances. Never ask for name, address, zip, or email.`;
+Part 1: Your conversational reply. 1-2 sentences max. Short and empathetic. No filler.
 
-const RESIDENT_ADDITIONS = `
+Part 2: The most relevant direction for this concern. Use one of:
+- If a town official or department applies: official name and phone from the directory above, then a script and talking points.
+- If an external resource applies: 1-2 resource links from the approved list above with a brief action line.
+- If not enough info to direct yet: leave Part 2 empty (output ||| with nothing after it).
 
-CALL SCRIPT FORMAT (use when user is ready to reach out to an official):
-Use blank lines between each section. Each talking point goes on its own line.
+Part 2 format when an official applies:
+[Name, Title: phone]
 
-[Official name, title, phone]
-
-Script: "Hi, my name is [Name] and I live at [Address]. I'm calling about [restate user's exact description]."
+Script: "Hi, [my name is NAME and I live at ADDRESS - if profile available, otherwise omit], I'm calling about [user's exact description]."
 
 Talking points:
 1) How has this affected you?
 2) What would you like to happen?
 3) How long has this been going on?
 
-Use ONLY what the user has said in the script. Do not add details or assumptions.
-The call script can be longer than 320 characters. All other replies stay under 320 characters.`;
+Use name and address from USER PROFILE if available. If not, omit them from the script opener.
+Part 1 must stay under 320 characters. Part 2 can be longer - it will be sent as a separate SMS.
 
-const EXPLORER_ADDITIONS = `
-
-You are helping someone explore Arlington's services and resources. Focus on explaining what exists, how things work, and where to go - without generating personalized call scripts. If they ask for rep-specific information, you can ask for their zip code.`;
+RULES: Plain ASCII text only. No markdown, no asterisks, no em dashes, no bullet points. Never use em dashes under any circumstances. Never ask for name, address, zip, or email.`;
 
 module.exports = async function handler(req, res) {
   if (req.method === "GET") {
@@ -148,16 +142,14 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    // Build system prompt based on whether address is known
+    // Build system prompt, injecting user profile and reps if known
     let systemPrompt = BASE_PROMPT;
     if (record.address) {
       const REPS_LINE = record.reps && record.reps.length > 0
         ? "\n\nSTATE AND FEDERAL REPS FOR THIS USER:\n" +
           record.reps.map((r) => `- ${r.name} (${r.area}): ${r.phone}`).join("\n")
         : "";
-      systemPrompt += RESIDENT_ADDITIONS + "\n\nUSER PROFILE:\nName: " + record.name + "\nAddress: " + record.address + REPS_LINE;
-    } else {
-      systemPrompt += EXPLORER_ADDITIONS;
+      systemPrompt += "\n\nUSER PROFILE:\nName: " + record.name + "\nAddress: " + record.address + REPS_LINE;
     }
 
     const updatedHistory = [
@@ -169,7 +161,7 @@ module.exports = async function handler(req, res) {
       "https://api.anthropic.com/v1/messages",
       {
         model: "claude-sonnet-4-6",
-        max_tokens: 500,
+        max_tokens: 600,
         system: systemPrompt,
         messages: updatedHistory,
       },
@@ -189,7 +181,12 @@ module.exports = async function handler(req, res) {
       history: [...updatedHistory, { role: "assistant", content: reply }].slice(-10),
     });
 
-    await sendSMS(from, reply);
+    // Split on ||| and send each non-empty part as a separate SMS
+    const parts = reply.split("|||").map((p) => p.trim()).filter((p) => p.length > 0);
+    for (const part of parts) {
+      await sendSMS(from, part);
+    }
+
     return res.status(200).send("OK");
 
   } catch (error) {
