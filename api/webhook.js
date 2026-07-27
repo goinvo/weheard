@@ -95,7 +95,7 @@ module.exports = async function handler(req, res) {
     const record = (await redis.get(from)) || {};
 
     // REPORT — full reset, start onboarding
-    if (body.toLowerCase() === "report") {
+    if (body.toLowerCase() === "heard") {
       await redis.set(from, { awaitingIntent: true, history: [] });
       await sendSMS(from, "Welcome to Heard, Arlington's civic guide. I'm here to help you figure out who to call, what programs exist, and how to get things done in town. Msg & data rates may apply. Reply HELP for help or STOP to opt out.");
       await sendSMS(from, "Are you an Arlington resident with a specific concern, or looking to explore what local services and resources are available?");
