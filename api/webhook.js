@@ -52,7 +52,7 @@ EXTERNAL RESOURCE LINKS (use these URLs and no others):
 
 When directing a user to an external resource, say "You can find more at [url]" - do not invent contact details.
 
-RULES: Plain ASCII text only. No markdown, no asterisks, no em dashes, no bullet points. Never ask for name, address, zip, or email.`;
+RULES: Plain ASCII text only. No markdown, no asterisks, no em dashes, no hyphens used as em dashes, no bullet points. Never use em dashes under any circumstances. Never ask for name, address, zip, or email.`;
 
 const RESIDENT_ADDITIONS = `
 
@@ -94,11 +94,11 @@ module.exports = async function handler(req, res) {
 
     const record = (await redis.get(from)) || {};
 
-    // REPORT — full reset, start onboarding
+    // HEARD — full reset, start onboarding
     if (body.toLowerCase() === "heard") {
-      await redis.set(from, { awaitingIntent: true, history: [] });
+      await redis.set(from, { history: [] });
       await sendSMS(from, "Welcome to Heard, Arlington's civic guide. I'm here to help you figure out who to call, what programs exist, and how to get things done in town. Msg & data rates may apply. Reply HELP for help or STOP to opt out.");
-      await sendSMS(from, "Are you an Arlington resident with a specific concern, or looking to explore what local services and resources are available?");
+      await sendSMS(from, "What's on your mind? Street repair, housing, food help, local question. No wrong answer.");
       return res.status(200).send("OK");
     }
 
@@ -109,34 +109,25 @@ module.exports = async function handler(req, res) {
         address: record.address || null,
         zip: record.zip || null,
         reps: record.reps || [],
-        intent: record.intent || null,
         history: [],
       });
       await sendSMS(from, "Starting fresh. What's on your mind?");
       return res.status(200).send("OK");
     }
 
-    // Awaiting intent — first reply after REPORT
-    if (record.awaitingIntent) {
-      const isExploring = /explor|not a resident|just look|learn|curious|browse/i.test(body);
-      if (isExploring) {
-        await redis.set(from, { intent: "exploring", history: [] });
-        await sendSMS(from, "Happy to help. What would you like to know about?");
-      } else {
-        await redis.set(from, { awaitingAddress: true, history: [] });
-        await sendSMS(from, "To connect you with the right people, reply with your full name and mailing address in one message.");
-      }
+    // No record — prompt to start
+    if (!record.history && !record.address) {
+      await sendSMS(from, "Text HEARD to get started.");
       return res.status(200).send("OK");
     }
 
-    // Awaiting address — resident confirmed, waiting for name + address
-    if (record.awaitingAddress) {
-      const hasAddress = /\d/.test(body) && body.length > 10;
+    // Mid-conversation address detection — capture if user provides name + address
+    if (!record.address) {
+      const hasAddress = /\d/.test(body) && body.length > 10 && /\b\d{5}\b/.test(body);
       if (hasAddress) {
         const zipMatch = body.match(/\b\d{5}\b/);
         const zip = zipMatch ? zipMatch[0] : null;
         const namePart = body.split(/\d/)[0].trim().replace(/,\s*$/, "").trim();
-        const firstName = namePart.split(/\s+/)[0] || "there";
         const fullName = namePart || "there";
         let reps = [];
         if (zip) {
@@ -149,21 +140,15 @@ module.exports = async function handler(req, res) {
             console.error("5 Calls API error:", e.message);
           }
         }
-        await redis.set(from, { name: fullName, address: body, zip, reps, history: [] });
-        await sendSMS(from, `Thanks, ${firstName}! What's on your mind?`);
-      } else {
-        await sendSMS(from, "We also need your full name and mailing address. Try: Jane Smith, 45 Lake St, Arlington MA 02474. Reply REPORT to start over if you get stuck.");
+        await redis.set(from, { ...record, name: fullName, address: body, zip, reps });
+        record.name = fullName;
+        record.address = body;
+        record.zip = zip;
+        record.reps = reps;
       }
-      return res.status(200).send("OK");
     }
 
-    // No record at all and no REPORT
-    if (!record.intent && !record.address) {
-      await sendSMS(from, "Text REPORT to get started.");
-      return res.status(200).send("OK");
-    }
-
-    // Build system prompt based on path
+    // Build system prompt based on whether address is known
     let systemPrompt = BASE_PROMPT;
     if (record.address) {
       const REPS_LINE = record.reps && record.reps.length > 0
